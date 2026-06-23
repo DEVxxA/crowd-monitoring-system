@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CrisisSense – Real-time Crowd Monitoring</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/static/style.css">
+
+<style>
+#particle-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+.sidebar, .main {
+  position: relative;
+  z-index: 2;
+}
+
+/* CCTV control row */
+.source-controls{
+  display:flex;
+  gap:12px;
+  margin-bottom:18px;
+}
+.cctv-btn.start{ background:#2563eb; }
+.cctv-btn.detect{ background:#7c3aed; }
+.cctv-btn.stop{ background:#1f2937; }
+
+/* Reset button */
+.reset-btn{
+  background:#374151;
+}
+.reset-btn:hover{
+  background:#4b5563;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="particle-canvas"></canvas>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="logo">🛡 Crowd Monitoring</div>
+  <nav>
+    <a class="active" href="#dashboard">Dashboard</a>
+    <a href="#live">Live Monitoring</a>
+    <a href="#risk-alerts">Risk Alerts</a>
+    <a href="#event-logs">Event Logs</a>
+    <a href="#reports">Reports</a>
+    
+  </nav>
+</aside>
+
+<main class="main">
+
+  <!-- DASHBOARD -->
+  <div id="dashboard" class="topbar">
+    <h1>Real-time Crowd Monitoring</h1>
+    <input class="search" placeholder="Search cameras, alerts…" />
+  </div>
+
+  <!-- METRICS -->
+  <section class="cards">
+
+    <div class="card-glow">
+      <div class="card">
+        <h4>Total Crowd Count</h4>
+        <p id="count">0</p>
+      </div>
+    </div>
+
+    <div class="card-glow">
+      <div class="card">
+        <h4>Current Risk Level</h4>
+        <p id="riskLabel">--</p>
+      </div>
+    </div>
+
+    <div class="card-glow">
+      <div class="card">
+        <h4>Risk Score</h4>
+        <p id="riskScore" class="count-animate">0</p>
+      </div>
+    </div>
+
+    <div class="card status-card">
+      <h4>Status</h4>
+      <div class="status-wrap">
+        <span id="statusBadge" class="badge normal">NORMAL</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- LIVE VIDEO -->
+  <section id="live" class="video-panel">
+
+    <div class="video-header">
+      <div>
+        <h3>Live Crowd Feed</h3>
+        <div class="sub">Camera 1 · Main Entrance</div>
+      </div>
+      <div class="live-dot">LIVE</div>
+    </div>
+
+    <!-- UPLOAD -->
+    <form class="upload-form" action="/upload" method="post" enctype="multipart/form-data" id="uploadForm">
+      <label class="file-ui">
+        <span class="file-icon">📁</span>
+        <div class="file-text">
+          <strong id="fileLabel">Choose crowd video</strong>
+          <small>MP4, AVI, MOV supported</small>
+        </div>
+        <input id="fileInput" type="file" name="video" accept="video/*" required>
+      </label>
+
+      <button class="analyze-btn" type="submit">
+        Upload & Analyze
+      </button>
+
+      <!-- RESET -->
+      <button type="button" class="analyze-btn reset-btn" onclick="resetUpload()">
+        🔄 Reset
+      </button>
+    </form>
+
+    <!-- CCTV CONTROLS -->
+    <div class="source-controls">
+
+      <form action="/start_webcam" method="post" onsubmit="return switchSource(event, '/start_webcam')">
+        <button class="analyze-btn cctv-btn start" type="submit">
+          🎥 Start Live CCTV
+        </button>
+      </form>
+
+      <form action="/start_detection" method="post" onsubmit="return switchSource(event, '/start_detection')">
+        <button class="analyze-btn cctv-btn detect" type="submit">
+          ▶ Start Detection
+        </button>
+      </form>
+
+      <form action="/stop_webcam" method="post" onsubmit="return switchSource(event, '/stop_webcam')">
+        <button class="analyze-btn cctv-btn stop" type="submit">
+          ⛔ Stop CCTV
+        </button>
+      </form>
+
+    </div>
+
+    <!-- STREAM -->
+    <div class="video-container">
+      <img id="stream" src="/video_feed">
+      <div class="controls">
+        <div>
+          <button onclick="play()">▶</button>
+          <button onclick="pause()">⏸</button>
+          <button onclick="replay()">⟲</button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ================= RISK ALERTS ================= -->
+  <section id="risk-alerts" class="panel-section">
+    <div class="section-header">
+      <h3>Risk Alerts</h3>
+      <span class="section-sub">Live risk trend</span>
+    </div>
+    <div class="panel-card">
+      <canvas id="riskChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ================= EVENT LOGS ================= -->
+  <section id="event-logs" class="panel-section">
+    <div class="section-header">
+      <h3>Event Logs</h3>
+      <span class="section-sub">System & detection history</span>
+    </div>
+    <div class="panel-card logs" id="eventLogContainer">
+      <!-- Real events will populate here -->
+    </div>
+  </section>
+
+  <!--
+  ADD THIS SECTION TO YOUR backend/templates/index.html
+  =========================================================
+  Place this card in your dashboard alongside the other metric cards.
+  Also add the <script> block at the bottom before </body>
+-->
+
+<!-- ── Alert Setup Card ──────────────────────────────────── -->
+<div class="alert-setup-card" id="alertSetupCard">
+  <div class="card-header">
+    <span class="card-icon">🔔</span>
+    <h3>Stampede Alert Setup</h3>
+  </div>
+
+  <!-- Status bar — shown when contact is already configured -->
+  <div id="alertStatus" style="display:none">
+    <div class="status-configured">
+      <span class="status-dot active"></span>
+      <span id="statusText">Alerts active</span>
+    </div>
+    <div class="contact-info" id="contactInfo"></div>
+    <button class="btn-remove" onclick="removeContact()">Remove Contact</button>
+    <button class="btn-test" onclick="testAlert()">Send Test Alert</button>
+  </div>
+
+  <!-- Step 1 — Enter email + phone -->
+  <div id="step1">
+    <p class="setup-desc">
+      Enter the authority's email address.<br>
+      An OTP will be sent to verify email alerts.
+    </p>
+    <div class="input-group">
+      <label>Authority Email</label>
+      <input type="email" id="authEmail" placeholder="control@authority.gov.in" />
+    </div>
+    <button class="btn-primary" onclick="sendOTP()" id="sendOtpBtn">
+      Send OTP to Email
+    </button>
+    <div id="step1Error" class="error-msg"></div>
+  </div>
+
+  <!-- Step 2 — Enter OTP -->
+  <div id="step2" style="display:none">
+    <p class="setup-desc">
+      ✉️ OTP sent! Check the email inbox and enter the 6-digit code below.
+    </p>
+    <div class="input-group">
+      <label>Enter OTP</label>
+      <input type="text" id="otpInput" placeholder="123456" maxlength="6"
+             style="letter-spacing:8px;font-size:22px;text-align:center;" />
+    </div>
+    <div class="otp-timer" id="otpTimer">Expires in <span id="timerCount">10:00</span></div>
+    <button class="btn-primary" onclick="verifyOTP()" id="verifyOtpBtn">
+      Verify OTP
+    </button>
+    <button class="btn-secondary" onclick="resetSetup()">← Back</button>
+    <div id="step2Error" class="error-msg"></div>
+  </div>
+
+  <!-- Success message -->
+  <div id="setupSuccess" style="display:none">
+    <div class="success-banner">
+      Authority contact verified! Email alerts will be sent automatically when DANGER is detected.
+    </div>
+  </div>
+</div>
+
+
+<!-- ── CSS — add inside your <style> tag ────────────────── -->
+<style>
+.alert-setup-card {
+  background: #1a1a2e;
+  border: 1px solid #2E74B5;
+  border-radius: 12px;
+  padding: 24px;
+  margin: 16px 0;
+}
+.alert-setup-card .card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.alert-setup-card .card-header h3 {
+  margin: 0;
+  color: #2E74B5;
+  font-size: 16px;
+}
+.setup-desc {
+  color: #aaa;
+  font-size: 13px;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.input-group {
+  margin-bottom: 12px;
+}
+.input-group label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.input-group input {
+  width: 100%;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+.input-group input:focus {
+  outline: none;
+  border-color: #2E74B5;
+}
+.btn-primary {
+  width: 100%;
+  background: #2E74B5;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 0.2s;
+}
+.btn-primary:hover { background: #1F5FA0; }
+.btn-primary:disabled { background: #444; cursor: not-allowed; }
+.btn-secondary {
+  width: 100%;
+  background: transparent;
+  color: #888;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+.btn-remove {
+  background: transparent;
+  color: #ff4444;
+  border: 1px solid #ff4444;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-right: 8px;
+  margin-top: 10px;
+}
+.btn-test {
+  background: transparent;
+  color: #44ff88;
+  border: 1px solid #44ff88;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.status-configured {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #44ff88;
+  font-weight: bold;
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #44ff88;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.contact-info {
+  font-size: 12px;
+  color: #888;
+  margin-top: 6px;
+}
+.error-msg {
+  color: #ff4444;
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 16px;
+}
+.otp-timer {
+  font-size: 12px;
+  color: #888;
+  text-align: center;
+  margin-top: 8px;
+}
+.success-banner {
+  background: #0d2d1a;
+  border: 1px solid #44ff88;
+  border-radius: 8px;
+  padding: 16px;
+  color: #44ff88;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+</style>
+
+
+<!-- ── JavaScript — add before </body> ──────────────────── -->
+<script>
+// ── Alert Setup Logic ─────────────────────────────────────
+
+let otpTimerInterval = null;
+
+// On page load, check if contact already configured
+window.addEventListener("DOMContentLoaded", checkAlertContact);
+
+async function checkAlertContact() {
+  try {
+    const res = await fetch("/api/alert/contact");
+    const data = await res.json();
+    if (data.configured) {
+      showConfiguredState(data);
+    }
+  } catch(e) {}
+}
+
+function showConfiguredState(data) {
+  document.getElementById("step1").style.display = "none";
+  document.getElementById("step2").style.display = "none";
+  document.getElementById("setupSuccess").style.display = "none";
+  document.getElementById("alertStatus").style.display = "block";
+  document.getElementById("contactInfo").innerHTML =
+    `Email: ${data.email}`;
+}
+
+async function sendOTP() {
+  const email = document.getElementById("authEmail").value.trim();
+  const errDiv = document.getElementById("step1Error");
+  const btn = document.getElementById("sendOtpBtn");
+
+  errDiv.textContent = "";
+
+  if (!email || !email.includes("@")) {
+    errDiv.textContent = "Please enter a valid email address.";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Sending OTP...";
+
+  try {
+    const res = await fetch("/api/alert/send-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      document.getElementById("step1").style.display = "none";
+      document.getElementById("step2").style.display = "block";
+      startOTPTimer(600); // 10 minutes
+    } else {
+      errDiv.textContent = data.error || "Failed to send OTP. Check your .env configuration.";
+      btn.disabled = false;
+      btn.textContent = "Send OTP to Email";
+    }
+  } catch(e) {
+    errDiv.textContent = "Network error. Is the server running?";
+    btn.disabled = false;
+    btn.textContent = "Send OTP to Email";
+  }
+}
+
+async function verifyOTP() {
+  const email = document.getElementById("authEmail").value.trim();
+  const otp   = document.getElementById("otpInput").value.trim();
+  const errDiv = document.getElementById("step2Error");
+  const btn   = document.getElementById("verifyOtpBtn");
+
+  errDiv.textContent = "";
+
+  if (otp.length !== 6) {
+    errDiv.textContent = "Please enter the 6-digit OTP.";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Verifying...";
+
+  try {
+    const res = await fetch("/api/alert/verify-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      clearInterval(otpTimerInterval);
+      document.getElementById("step2").style.display = "none";
+      document.getElementById("setupSuccess").style.display = "block";
+      setTimeout(() => checkAlertContact(), 2000);
+    } else {
+      errDiv.textContent = data.error || "Incorrect OTP. Try again.";
+      btn.disabled = false;
+      btn.textContent = "Verify OTP";
+    }
+  } catch(e) {
+    errDiv.textContent = "Network error.";
+    btn.disabled = false;
+    btn.textContent = "Verify OTP";
+  }
+}
+
+function resetSetup() {
+  clearInterval(otpTimerInterval);
+  document.getElementById("step1").style.display = "block";
+  document.getElementById("step2").style.display = "none";
+  document.getElementById("step1Error").textContent = "";
+  document.getElementById("sendOtpBtn").disabled = false;
+  document.getElementById("sendOtpBtn").textContent = "Send OTP to Email";
+}
+
+async function removeContact() {
+  if (!confirm("Remove authority contact? Alerts will be disabled.")) return;
+  await fetch("/api/alert/contact", { method: "DELETE" });
+  document.getElementById("alertStatus").style.display = "none";
+  document.getElementById("step1").style.display = "block";
+}
+
+async function testAlert() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = "Sending...";
+  const res  = await fetch("/api/alert/test", { method: "POST" });
+  const data = await res.json();
+  btn.disabled = false;
+  btn.textContent = "Send Test Alert";
+  if (data.success) {
+    alert("Test email alert sent successfully!");
+  } else {
+    alert("Failed: " + (data.error || "Unknown error"));
+  }
+}
+
+function startOTPTimer(seconds) {
+  clearInterval(otpTimerInterval);
+  let remaining = seconds;
+  const el = document.getElementById("timerCount");
+  otpTimerInterval = setInterval(() => {
+    remaining--;
+    const m = Math.floor(remaining / 60).toString().padStart(2, "0");
+    const s = (remaining % 60).toString().padStart(2, "0");
+    el.textContent = `${m}:${s}`;
+    if (remaining <= 0) {
+      clearInterval(otpTimerInterval);
+      document.getElementById("step2Error").textContent = "OTP expired. Please go back and request a new one.";
+      document.getElementById("verifyOtpBtn").disabled = true;
+    }
+  }, 1000);
+}
+</script>
+
+</main>
+
+<!-- ================= SCRIPTS ================= -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+/* File preview */
+fileInput.onchange = () => {
+  if (fileInput.files.length)
+    fileLabel.textContent = fileInput.files[0].name;
+};
+
+/* Video controls */
+let playing = true;
+function pause(){ if(playing){ stream.dataset.src=stream.src; stream.src=""; playing=false; } }
+function play(){ if(!playing){ stream.src=stream.dataset.src||"/video_feed"; playing=true; } }
+function replay(){ stream.src="/video_feed?"+Date.now(); }
+async function switchSource(event, endpoint){
+  event.preventDefault();
+  await fetch(endpoint,{method:"POST"});
+  stream.src="/video_feed?"+Date.now();
+  playing=true;
+  return false;
+}
+
+/* Reset */
+function resetUpload(){
+  fileInput.value="";
+  fileLabel.textContent="Choose crowd video";
+  fetch("/reset",{method:"POST"});
+  stream.src="/video_feed?"+Date.now();
+}
+
+/* Count animation */
+function animateValue(el,start,end,duration=450){
+  const diff=end-start, t0=performance.now();
+  function step(t){
+    const p=Math.min((t-t0)/duration,1);
+    el.innerText=Math.floor(start+diff*p);
+    if(p<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+let lastRisk=0;
+
+/* Metrics */
+async function updateMetrics(){
+  const r=await fetch("/metrics");
+  const d=await r.json();
+
+  count.innerText=d.count;
+  animateValue(riskScore,lastRisk,d.risk);
+  lastRisk=d.risk;
+
+  riskLabel.innerText=d.risk_label;
+  statusBadge.innerText=d.risk_label;
+  statusBadge.className="badge "+d.risk_label.toLowerCase();
+
+  document.body.classList.toggle("danger-mode",d.risk_label==="DANGER");
+}
+setInterval(updateMetrics,400);
+
+/* Risk Graph */
+const ctx=document.getElementById("riskChart").getContext("2d");
+const riskChart=new Chart(ctx,{
+  type:"line",
+  data:{labels:Array(20).fill(""),datasets:[{data:Array(20).fill(0),borderColor:"#ef4444",backgroundColor:"rgba(239,68,68,.25)",tension:.4,fill:true,pointRadius:0}]},
+  options:{plugins:{legend:{display:false}},scales:{y:{min:0,max:100},x:{display:false}}}
+});
+
+async function updateRiskGraph(){
+  const r=await fetch("/metrics");
+  const d=await r.json();
+  riskChart.data.datasets[0].data.push(d.risk);
+  riskChart.data.datasets[0].data.shift();
+  riskChart.update();
+}
+setInterval(updateRiskGraph,1500);
+</script>
+
+</body>
+</html>
