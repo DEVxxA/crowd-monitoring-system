@@ -128,7 +128,10 @@ class DeleteContact(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-   index_path = os.path.join(BASE_DIR, "templates", "index.html")
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request}
+    )
 
 @app.get("/metrics")
 async def metrics():
