@@ -5,3 +5,5 @@ fastapi
 uvicorn
 python-multipart
 scipy
+jinja2
+python-dotenv
