@@ -1,3 +1,4 @@
+Website : https://crowd-monitoring-system.onrender.com/
 # CrisisSense
 
 CrisisSense is a Python-based crowd monitoring system for estimating crowd density, visualizing risk, and sending email alerts when a dangerous crowd condition is detected. It combines a CSRNet crowd-counting model, ONNX Runtime inference, OpenCV video processing, and a FastAPI dashboard.
